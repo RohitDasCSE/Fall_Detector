@@ -27,8 +27,8 @@ const int sosPin = 14;
 const int ledPin = 15;         
 
 // SIM800L serial pins and caregiver numbers
-const int SIM_RX_PIN = 4;
-const int SIM_TX_PIN = 5;
+const int SIM_RX_PIN = 32;   // ESP32 receives from SIM800L TX here
+const int SIM_TX_PIN = 33;   // ESP32 transmits to SIM800L RX here
 const char* CAREGIVER_NUMBERS[] = {"+1234567890", "+1987654320"};
 const int NUM_CAREGIVERS = 2;
 
@@ -52,7 +52,7 @@ const uint16_t serverPort = 443;
 const char serverPath[] = "/fallAlert";
 
 // Timing constants
-const unsigned long     BLINK_INTERVAL        = 500;      // ms 
+const unsigned long     BLINK_INTERVAL        =   500;     // ms 
 const unsigned long     SOS_DEBOUNCE_TIME     =   300;    // ms
 const unsigned long     WIFI_CHECK_INTERVAL   =   30000;  // ms
 
