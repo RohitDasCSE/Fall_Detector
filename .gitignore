@@ -1,0 +1,8 @@
+# PlatformIO build folders
+.pio/
+
+# VSCode workspace settings
+.vscode/
+
+# Tests
+test/
