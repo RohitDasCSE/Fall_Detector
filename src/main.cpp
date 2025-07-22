@@ -481,8 +481,8 @@ void handleAlertActiveState(unsigned long currentTime) {
     return;
   }
   
-  // Timeout after 60 seconds and proceed to alerts
-  if (currentTime - stateStartTime > 60000) {
+  // Timeout after 10 seconds and proceed to alerts
+  if (currentTime - stateStartTime > 10000) {
     digitalWrite(buzzerPin, LOW);
     digitalWrite(ledPin, LOW);
     currentState = STATE_SENDING_ALERTS;
