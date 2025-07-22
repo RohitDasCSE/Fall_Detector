@@ -5,6 +5,10 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <audio_inferencing.h>
+#include <driver/i2s.h>
+#include <edge-impulse-sdk/classifier/ei_run_classifier.h>
+#include <edge-impulse-sdk/dsp/numpy.hpp>
 
 // System states
 enum SystemState {
@@ -52,22 +56,52 @@ const uint16_t serverPort = 443;
 const char serverPath[] = "/fallAlert";
 
 // Timing constants
-const unsigned long     BLINK_INTERVAL        =   500;     // ms 
+const unsigned long     BLINK_INTERVAL        =   500;    // ms 
 const unsigned long     SOS_DEBOUNCE_TIME     =   300;    // ms
 const unsigned long     WIFI_CHECK_INTERVAL   =   30000;  // ms
+const unsigned long     AUDIO_COOLDOWN        =   10000;  // ms
 
 // State timers
 unsigned long stateStartTime = 0;
 unsigned long lastBlinkTime = 0;
 unsigned long lastWiFiCheck = 0;
 unsigned long lastSosCheck = 0;
+unsigned long lastAudioTrigger = 0;
 
 // System flags
 bool freeFallDetected = false;
 bool impactDetected = false;
 bool staticCondition = false;
 bool alertOutputState = false; // buzzer/LED state
+volatile bool audioHelpDetected = false;
 String locationCoords = "unknown";
+
+// Audio inference variables
+static bool record_status = true;
+static signed short sampleBuffer[2048];
+static bool debug_nn = false;
+
+// Audio buffer configuration
+const int SAMPLE_BUFFER_SIZE = 2048;
+static signed short sampleBuffer[SAMPLE_BUFFER_SIZE];
+const int INFERENCE_BUFFER_SIZE = EI_CLASSIFIER_SLICE_SIZE;
+
+// Audio inference structure
+typedef struct {
+    signed short *buffers[2];       // array of two pointers to the two buffers
+    unsigned char buf_select;       // which buffer index is currently being filled
+    unsigned char buf_ready;        // 1 means buffer is ready and can be processed
+    unsigned int buf_count;         // no. of samples written so far in current buffer
+    unsigned int n_samples;         // samples per buffer (slice size)
+} inference_t;
+
+static inference_t inference;
+
+// I2S configuration for INMP441
+const i2s_port_t I2S_PORT = I2S_NUM_0;
+const int I2S_BCK_PIN = 26;
+const int I2S_WS_PIN = 25;
+const int I2S_DOUT_PIN = 27;
 
 void setup() {
   Serial.begin(115200);
@@ -124,6 +158,9 @@ void setup() {
     Serial.println("\nFailed to connect! Continuing without WiFi");
   }
 
+  // Initialize audio inference
+  initAudioInference();
+
   // Calibration delay
   Serial.println("Calibrating sensors...");
   delay(2000);
@@ -157,6 +194,22 @@ void loop() {
     }
   }
 
+  // Check audio detection ("help")
+  if (audioHelpDetected && currentState == STATE_MONITORING && 
+      (currentTime - lastAudioTrigger > AUDIO_COOLDOWN)) {
+    Serial.println("Audio help detected - Manual alert activated!");
+    currentState = STATE_ALERT_ACTIVE;
+    stateStartTime = currentTime;
+    lastAudioTrigger = currentTime;
+    audioHelpDetected = false;
+    
+    // Initialize alert outputs
+    alertOutputState = false;
+    digitalWrite(buzzerPin, LOW);
+    digitalWrite(ledPin, LOW);
+    lastBlinkTime = currentTime;
+  }
+
   // state machine
   switch (currentState) {
     case STATE_MONITORING:
@@ -180,6 +233,120 @@ void loop() {
   }
   
   delay(10);
+}
+
+// Audio Inference Initialization
+void initAudioInference() {
+  i2s_config_t i2s_config = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+    .sample_rate = 16000,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+    .communication_format = I2S_COMM_FORMAT_I2S_MSB,
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+    .dma_buf_count = 8,
+    .dma_buf_len = 256,
+    .use_apll = false,
+    .tx_desc_auto_clear = false,
+    .fixed_mclk = 0
+  };
+  
+  i2s_pin_config_t pin_config = {
+    .bck_io_num = I2S_BCK_PIN,
+    .ws_io_num = I2S_WS_PIN,
+    .data_out_num = I2S_PIN_NO_CHANGE,
+    .data_in_num = I2S_DOUT_PIN
+  };
+  
+  i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
+  i2s_set_pin(I2S_PORT, &pin_config);
+
+  // Allocate inference buffers
+  inference.buffers[0] = (signed short *)malloc(INFERENCE_BUFFER_SIZE * sizeof(signed short));
+  inference.buffers[1] = (signed short *)malloc(INFERENCE_BUFFER_SIZE * sizeof(signed short));
+  
+  if (!inference.buffers[0] || !inference.buffers[1]) {
+    Serial.println("Failed to allocate audio buffers");
+    return;
+  }
+  
+  inference.buf_select = 0;
+  inference.buf_count = 0;
+  inference.n_samples = INFERENCE_BUFFER_SIZE;
+  inference.buf_ready = 0;
+  
+  // Start audio inference task
+  xTaskCreatePinnedToCore(
+    audioInferenceTask,    // Task function
+    "AudioInference",      // Task name
+    8192,                  // Stack size (bytes)
+    NULL,                  // Task parameters
+    1,                     // Task priority
+    NULL,                  // Task handle
+    0                      // Core ID (core 0)
+  );
+}
+
+void audioInferenceTask(void *pvParameters) {
+  size_t bytes_read;
+  const size_t bytes_to_read = SAMPLE_BUFFER_SIZE * sizeof(int16_t);
+  
+  while (true) {
+    // Read audio data from I2S
+    i2s_read(I2S_PORT, (void*)sampleBuffer, bytes_to_read, &bytes_read, portMAX_DELAY);
+    int samples_read = bytes_read / sizeof(int16_t);
+
+    if (samples_read <= 0) continue;
+    
+    // Process audio samples
+    for (int i = 0; i < samples_read; i++) {
+      inference.buffers[inference.buf_select][inference.buf_count++] = sampleBuffer[i];
+      
+      if (inference.buf_count >= inference.n_samples) {
+        inference.buf_select ^= 1;
+        inference.buf_count = 0;
+        inference.buf_ready = 1;
+        
+        // Run inference when buffer is ready
+        if (inference.buf_ready) {
+          runAudioInference();
+          inference.buf_ready = 0;
+        }
+      }
+    }
+  }
+}
+
+void runAudioInference() {
+  signal_t signal;
+  signal.total_length = INFERENCE_BUFFER_SIZE;
+  signal.get_data = &microphone_audio_signal_get_data;
+  
+  ei_impulse_result_t result = {0};
+  EI_IMPULSE_ERROR err = run_classifier_continuous(&signal, &result, debug_nn);
+  
+  if (err != EI_IMPULSE_OK) {
+    Serial.print("Audio inference error: ");
+    Serial.println(err);
+    return;
+  }
+  
+  // Check for "help" detection
+  for (size_t ix = 0; ix < EI_CLASSIFIER_LABEL_COUNT; ix++) {
+    if (strcmp(result.classification[ix].label, "help") == 0) {
+      if (result.classification[ix].value > 0.75f) { 
+        audioHelpDetected = true;
+        Serial.print("Help detected! Confidence: ");
+        Serial.println(result.classification[ix].value);
+      }
+    }
+  }
+}
+
+// Audio signal processing
+static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr) {
+  numpy::int16_to_float(&inference.buffers[inference.buf_select ^ 1][offset], out_ptr, length);
+  return 0;
 }
 
 void handleSosButtonPress(unsigned long currentTime) {
