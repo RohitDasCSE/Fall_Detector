@@ -78,7 +78,6 @@ String locationCoords = "unknown";
 
 // Audio inference variables
 static bool record_status = true;
-static signed short sampleBuffer[2048];
 static bool debug_nn = false;
 
 // Audio buffer configuration
