@@ -10,6 +10,28 @@
 #include <edge-impulse-sdk/classifier/ei_run_classifier.h>
 #include <edge-impulse-sdk/dsp/numpy.hpp>
 
+// Function prototypes
+void        handleMonitoringState();
+void        handleFreeFallState(unsigned long currentTime);
+void        handleImpactState(unsigned long currentTime);
+void        handleStaticCheckState(unsigned long currentTime);
+void        handleAlertActiveState(unsigned long currentTime);
+void        handleSendingAlertsState();
+
+void        initAudioInference();
+void        audioInferenceTask(void *pvParameters);
+void        runAudioInference();
+static int  microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr);
+
+void        handleSosButtonPress(unsigned long currentTime);
+void        resetDetectionStates();
+void        checkWiFiConnection();
+
+bool        sendATCommand(const char* cmd, const char* expected, unsigned long timeout);
+void        sendSMSAlert(const char* number, const String& timeStr);
+void        makeEmergencyCall(const char* number);
+void        sendServerAlert(const String& timeStr);
+
 // System states
 enum SystemState {
   STATE_MONITORING,
