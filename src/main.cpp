@@ -452,11 +452,10 @@ void handleStaticCheckState(unsigned long currentTime) {
   mpu.getEvent(&a, &g, &temp);
   
   // Check for movement
-  if (fabsf(g.gyro.x) > GYRO_MOVEMENT_THRESH ||
-      fabsf(g.gyro.y) > GYRO_MOVEMENT_THRESH ||
-      fabsf(g.gyro.z) > GYRO_MOVEMENT_THRESH) {
-    staticCondition = false;
-  }
+  float gyroMag = sqrtf(g.gyro.x*g.gyro.x + 
+                        g.gyro.y*g.gyro.y + 
+                        g.gyro.z*g.gyro.z);
+  if (gyroMag > GYRO_MOVEMENT_THRESH) staticCondition = false;
   
   // Check cancel button
   if (digitalRead(cancelPin) == LOW) {
