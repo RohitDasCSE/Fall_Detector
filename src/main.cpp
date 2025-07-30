@@ -66,7 +66,7 @@ const float             FREE_FALL_THRESH        =     0.7f;                   //
 const float             IMPACT_THRESH           =     2.4f;                   // g
 const unsigned long     MAX_IMPACT_INTERVAL     =     800;                    // ms
 const unsigned long     STATIC_DURATION         =     10000;                  // ms
-const float             GYRO_MOVEMENT_THRESH    =     15;                     // deg/s
+const float             GYRO_MOVEMENT_THRESH    =     10.0f;                  // deg/s
 
 // Wi-Fi credentials
 const char ssid[] = "James Bond";
